@@ -1,6 +1,9 @@
-name: dslink_mongodb
-description: MongoDB for DSA
+name: dslink_rethinkdb
+authors:
+  - Logan Gorence <loganjohngorence@gmail.com>
+  - Kenneth Endfinger <kaendfinger@gmail.com>
+description: RethinkDB for DSA
 dependencies:
   dslink:
     git: https://github.com/IOT-DSA/sdk-dslink-dart.git
-  mongo_dart: "^0.1.47"
+  rethinkdb_driver: "^2.0.3"

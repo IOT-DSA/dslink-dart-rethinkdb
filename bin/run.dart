@@ -1,173 +1,100 @@
-import "dart:convert";
+import "dart:async";
 
-import "package:mongo_dart/mongo_dart.dart";
+import "package:rethinkdb_driver/rethinkdb_driver.dart" as Rethink;
 import "package:dslink/dslink.dart";
 import "package:dslink/nodes.dart";
 
 LinkProvider link;
+final Rethink.Rethinkdb r = new Rethink.Rethinkdb();
 
 main(List<String> args) async {
   link = new LinkProvider(
-      args,
-      "MongoDB-",
-      defaultNodes: {
-        "Create_Connection": {
-          r"$name": "Create Connection",
-          r"$is": "createConnection",
-          r"$invokable": "write",
-          r"$params": [
-            {
-              "name": "name",
-              "type": "string"
-            },
-            {
-              "name": "url",
-              "type": "string"
-            }
-          ]
+    args,
+    "RethinkDB-",
+    defaultNodes: {
+      "Create_Connection": {
+        r"$name": "Create Connection",
+        r"$is": "createConnection",
+        r"$invokable": "write",
+        r"$params": [
+          {
+            "name": "name",
+            "type": "string"
+          },
+          {
+            "name": "host",
+            "type": "string"
+          },
+          {
+            "name": "port",
+            "type": "uint"
+          },
+          {
+            "name": "auth",
+            "type": "string"
+          }
+        ]
+      }
+    },
+    profiles: {
+      "connection": (String path) => new ConnectionNode(path),
+      "deleteConnection": (String path) => new DeleteConnectionNode(path),
+      "editConnection": (String path) => new SimpleActionNode(path, (Map<String, dynamic> params) async {
+        var name = params["name"];
+        var oldName = path.split("/")[1];
+        ConnectionNode conn = link["/${oldName}"];
+        if (name != null && name != oldName) {
+          if ((link.provider as SimpleNodeProvider).nodes.containsKey("/${name}")) {
+            return {
+              "success": false,
+              "message": "Connection '${name}' already exists."
+            };
+          } else {
+            var n = conn.serialize(false);
+            link.removeNode("/${oldName}");
+            link.addNode("/${name}", n);
+            (link.provider as SimpleNodeProvider).nodes.remove("/${oldName}");
+            conn = link["/${name}"];
+          }
         }
-      },
-      profiles: {
-        "connection": (String path) => new ConnectionNode(path),
-        "deleteConnection": (String path) => new DeleteConnectionNode(path),
-        "editConnection": (String path) => new SimpleActionNode(path, (Map<String, dynamic> params) async {
-          var name = params["name"];
-          var oldName = path.split("/")[1];
-          ConnectionNode conn = link["/${oldName}"];
-          if (name != null && name != oldName) {
-            if ((link.provider as SimpleNodeProvider).nodes.containsKey("/${name}")) {
-              return {
-                "success": false,
-                "message": "Connection '${name}' already exists."
-              };
-            } else {
-              var n = conn.serialize(false);
-              link.removeNode("/${oldName}");
-              link.addNode("/${name}", n);
-              (link.provider as SimpleNodeProvider).nodes.remove("/${oldName}");
-              conn = link["/${name}"];
-            }
+
+        link.save();
+
+        var host = params["host"];
+        var oldHost = conn.configs[r"$$rethink_host"];
+
+        if (host != null && oldHost != host) {
+          conn.configs[r"$$rethink_host"] = host;
+          try {
+            await conn.setup();
+          } catch (e) {
+            return {
+              "success": false,
+              "message": "Failed to connect to database: ${e}"
+            };
           }
+        }
 
-          link.save();
+        link.save();
 
-          var url = params["url"];
-          var oldUrl = conn.configs[r"$$mongo_url"];
-
-          if (url != null && oldUrl != url) {
-            conn.configs[r"$$mongo_url"] = url;
-            try {
-              await conn.setup();
-            } catch (e) {
-              return {
-                "success": false,
-                "message": "Failed to connect to database: ${e}"
-              };
-            }
-          }
-
-          link.save();
-
-          return {
-            "success": true,
-            "message": "Success!"
-          };
-        }),
-        "createConnection": (String path) => new CreateConnectionNode(path),
-        "listCollections": (String path) => new SimpleActionNode(path, (Map<String, dynamic> params) async {
-          var db = dbForPath(path);
-          return (await db.getCollectionNames()).map((x) => [x]);
-        }),
-        "insertIntoCollection": (String path) => new SimpleActionNode(path, (Map<String, dynamic> params) async {
-          var collection = params["collection"];
-          var object = params["object"];
-
-          if (object is String) {
-            try {
-              object = JSON.decode(object);
-            } catch (e) {
-              object = {};
-            }
-          } else if (object is! Map) {
-            object = {};
-          }
-
-          var db = dbForPath(path);
-          return await db.collection(collection).insert(object);
-        }),
-        "getCollection": (String path) => new SimpleActionNode(path, (Map<String, dynamic> params) {
-          var r = new AsyncTableResult();
-          var db = dbForPath(path);
-          var limit = params["limit"];
-          var sortByField = params["sortByField"];
-          var sortDirection = params["sortDirection"];
-          var fields = params["fields"];
-          var explain = params["explain"];
-
-          if (fields == null) {
-            fields = [];
-          }
-
-          if (explain == null) {
-            explain = false;
-          }
-
-          if (fields is String) {
-            fields = fields.split(",");
-          }
-
-          var descending = false;
-
-          if (sortDirection == "descending") {
-            descending = true;
-          }
-
-          var builder = new SelectorBuilder();
-          if (limit != null) {
-            builder.limit(limit);
-          }
-
-          if (fields != null && fields.isNotEmpty) {
-            builder.fields(fields);
-          }
-
-          if (explain) {
-            builder.explain();
-          }
-
-          if (sortByField != null) {
-            if (sortByField == "") {
-              sortByField = null;
-            } else {
-              builder.sortBy(sortByField, descending: descending);
-            }
-          }
-
-          db.collection(params["collection"]).find(builder).toList().then((data) {
-            var keys = data.map((x) => x.keys).expand((it) => it).toSet();
-
-            r.columns = keys.map((it) => {
-              "name": it,
-              "type": "dynamic"
-            }).toList();
-            r.update(data.map((x) => x.values.map((it) => it is ObjectId ? (it as ObjectId).toHexString() : it).toList()).toList());
-            r.close();
-          });
-          return r;
-        }),
-        "removeObject": (String path) => new SimpleActionNode(path, (Map<String, dynamic> params) async {
-          var db = dbForPath(path);
-          await db.collection(params["collection"]).remove(new SelectorBuilder().eq("_id", params["id"]));
-          return {};
-        }),
-        "dropCollection": (String path) => new SimpleActionNode(path, (Map<String, dynamic> params) async {
-          var db = dbForPath(path);
-          await db.collection(params["collection"]).drop();
-          return {};
-        })
-      },
-      autoInitialize: false,
-      encodePrettyJson: true
+        return {
+          "success": true,
+          "message": "Sucess"
+        };
+      }),
+      "createConnection": (String path) => new CreateConnectionNode(path),
+      "listTables": (String path) => new SimpleActionNode(path, (Map<String, dynamic> params) async {
+        var db = dbFromPath(path);
+        var conn = connFromPath(path);
+        print(db);
+        print(conn);
+        //return (await r.db(db).tableList().run(conn));
+      }),
+      "createDatabase": (String path) => new CreateDatabaseNode(path),
+      "database": (String path) => new DatabaseNode(path)
+    },
+    autoInitialize: false,
+    encodePrettyJson: true
   );
 
   link.init();
@@ -182,7 +109,9 @@ class CreateConnectionNode extends SimpleNode {
   onInvoke(Map<String, dynamic> params) async {
     link.addNode("/${params["name"]}", {
       r"$is": "connection",
-      r"$$mongo_url": params["url"]
+      r"$$rethink_host": params["host"],
+      r"$$rethink_port": params["port"],
+      r"$$rethink_auth": params["auth"]
     });
 
     link.save();
@@ -202,100 +131,23 @@ class ConnectionNode extends SimpleNode {
   setup() async {
     var name = new Path(path).name;
 
-    if (dbs.containsKey(name)) {
-      await dbs[name].close();
-      dbs.remove(name);
+    if (conns.containsKey(name)) {
+      await conns[name].close();
+      conns.remove(name);
     }
 
-    var url = configs[r"$$mongo_url"];
-    Db db = new Db(url);
-
-    await db.open();
-
-    dbs[name] = db;
+    var host = configs[r"$$rethink_host"];
+    var port = int.parse(configs[r"$$rethink_port"]);
+    //var auth = configs[r"$$rethink_auth"];
+    Rethink.Connection conn = await r.connect(host: host, port: port);
+    conns[name] = conn;
 
     var x = {
-      "Insert_Object": {
-        r"$name": "Insert Object",
-        r"$is": "insertIntoCollection",
+      "Create_Database": {
+        r"$name": "Create Database",
+        r"$is": "createDatabase",
         r"$invokable": "write",
         r"$params": [
-          {
-            "name": "collection",
-            "type": "string"
-          },
-          {
-            "name": "object",
-            "type": "map"
-          }
-        ]
-      },
-      "Remove_Object": {
-        r"$name": "Remove Object",
-        r"$is": "removeObject",
-        r"$invokable": "write",
-        r"$params": [
-          {
-            "name": "collection",
-            "type": "string"
-          },
-          {
-            "name": "id",
-            "type": "string"
-          }
-        ]
-      },
-      "Get_Collection": {
-        r"$name": "Find Objects",
-        r"$is": "getCollection",
-        r"$invokable": "write",
-        r"$result": "table",
-        r"$params": [
-          {
-            "name": "collection",
-            "type": "string"
-          },
-          {
-            "name": "limit",
-            "type": "number"
-          },
-          {
-            "name": "fields",
-            "type": "array"
-          },
-          {
-            "name": "sortByField",
-            "type": "string"
-          },
-          {
-            "name": "sortDirection",
-            "type": "enum[ascending,descending]"
-          },
-          {
-            "name": "explain",
-            "type": "bool"
-          }
-        ],
-        r"$columns": []
-      },
-      "Drop_Collection": {
-        r"$name": "Drop Collection",
-        r"$is": "dropCollection",
-        r"$invokable": "write",
-        r"$result": "values",
-        r"$params": [
-          {
-            "name": "collection",
-            "type": "string"
-          }
-        ]
-      },
-      "List_Collections": {
-        r"$name": "List Collections",
-        r"$is": "listCollections",
-        r"$invokable": "write",
-        r"$result": "table",
-        r"$columns": [
           {
             "name": "name",
             "type": "string"
@@ -306,7 +158,6 @@ class ConnectionNode extends SimpleNode {
         r"$name": "Edit Connection",
         r"$is": "editConnection",
         r"$invokable": "write",
-        r"$result": "values",
         r"$params": [
           {
             "name": "name",
@@ -314,9 +165,14 @@ class ConnectionNode extends SimpleNode {
             "default": name
           },
           {
-            "name": "url",
+            "name": "host",
             "type": "string",
-            "default": url
+            "default": host
+          },
+          {
+            "name": "port",
+            "type": "uint",
+            "default": port
           }
         ],
         r"$columns": [
@@ -358,6 +214,73 @@ class DeleteConnectionNode extends SimpleNode {
   }
 }
 
-Map<String, Db> dbs = {};
+class CreateDatabaseNode extends SimpleNode {
+  CreateDatabaseNode(String path) : super(path);
 
-Db dbForPath(String path) => dbs[path.split("/").take(2).last];
+  @override
+  onInvoke(Map<String, dynamic> params) async {
+    var p = new Path(path).parentPath;
+    print(p);
+    link.addNode("$p/${params["name"]}", {
+      r"$is": "database"
+    });
+
+    link.save();
+
+    return {};
+  }
+}
+
+class DatabaseNode extends SimpleNode {
+  DatabaseNode(String path) : super(path);
+
+  @override
+  void onCreated() {
+    setup();
+  }
+
+  setup() async {
+    var p = new Path(path);
+    var connName = new Path(p.parentPath).name;
+    var dbName = p.name;
+
+    try {
+      await new Future.delayed(new Duration(seconds: 1));
+      var conn = conns[connName];
+      print(dbName);
+      await r.dbCreate(dbName).run(conn).catchError((err) {
+        print(err);
+      });
+    } catch (e) {
+      // Ignore
+      if (e is Rethink.RqlCompileError) {
+        //print(e.message);
+        //print(e.frames);
+      }
+    }
+
+    var x = {
+      "List_Tables": {
+        r"$name": "List Tables",
+        r"$is": "listTables",
+        r"$invokable": "write",
+        r"$params": [
+          {
+            "name": "name",
+            "type": "string"
+          }
+        ]
+      }
+    };
+
+    for (var a in x.keys) {
+      link.removeNode("${path}/${a}");
+      link.addNode("${path}/${a}", x[a]);
+    }
+  }
+}
+
+Map<String, Rethink.Connection> conns = {};
+
+String dbFromPath(String path) => path.split("/").take(2)[1];
+String connFromPath(String path) => path.split("/").take(2).first;
