@@ -1,3 +1,6 @@
+import "dart:async";
+import "dart:convert";
+
 import "package:rethinkdb_driver/rethinkdb_driver.dart" as Rethink;
 import "package:dslink/dslink.dart";
 import "package:dslink/nodes.dart";
@@ -86,7 +89,19 @@ main(List<String> args) async {
       "database": (String path) => new DatabaseNode(path),
       "createTable": (String path) => new CreateTableNode(path),
       "deleteTable": (String path) => new DeleteTableNode(path),
-      "table": (String path) => new TableNode(path)
+      "table": (String path) => new TableNode(path),
+      "insert": (String path) => new SimpleActionNode(path, (Map<String, dynamic> params) async {
+        var p = new Path(path);
+        var tableNode = new Path(p.parentPath);
+        var dbNode = new Path(tableNode.parentPath);
+        var tableName = tableNode.name;
+        var dbName = dbNode.name;
+        var conn = new Path(dbNode.parentPath).name;
+        var obj = JSON.decode(params["object"]);
+
+        print("bro, I'm here for ya");
+        await r.db(dbName).table(tableName).insert(obj).run(conn);
+      })
     },
     autoInitialize: false,
     encodePrettyJson: true
@@ -134,74 +149,75 @@ class ConnectionNode extends SimpleNode {
     var host = configs[r"$$rethink_host"];
     var port = int.parse(configs[r"$$rethink_port"]);
     //var auth = configs[r"$$rethink_auth"];
-    Rethink.Connection conn = await r.connect(host: host, port: port);
-    conns[name] = conn;
+    r.connect(host: host, port: port).then((conn) async {
+      conns[name] = conn;
 
-    var x = {
-      "Create_Database": {
-        r"$name": "Create Database",
-        r"$is": "createDatabase",
-        r"$invokable": "write",
-        r"$params": [
-          {
-            "name": "name",
-            "type": "string"
-          }
-        ]
-      },
-      "Edit_Connection": {
-        r"$name": "Edit Connection",
-        r"$is": "editConnection",
-        r"$invokable": "write",
-        r"$params": [
-          {
-            "name": "name",
-            "type": "string",
-            "default": name
-          },
-          {
-            "name": "host",
-            "type": "string",
-            "default": host
-          },
-          {
-            "name": "port",
-            "type": "uint",
-            "default": port
-          }
-        ],
-        r"$columns": [
-          {
-            "name": "success",
-            "type": "bool"
-          },
-          {
-            "name": "message",
-            "type": "string"
-          }
-        ]
-      },
-      "Delete_Connection": {
-        r"$name": "Delete Connection",
-        r"$is": "deleteConnection",
-        r"$invokable": "write",
-        r"$result": "values",
-        r"$params": [],
-        r"$columns": []
+      var x = {
+        "Create_Database": {
+          r"$name": "Create Database",
+          r"$is": "createDatabase",
+          r"$invokable": "write",
+          r"$params": [
+            {
+              "name": "name",
+              "type": "string"
+            }
+          ]
+        },
+        "Edit_Connection": {
+          r"$name": "Edit Connection",
+          r"$is": "editConnection",
+          r"$invokable": "write",
+          r"$params": [
+            {
+              "name": "name",
+              "type": "string",
+              "default": name
+            },
+            {
+              "name": "host",
+              "type": "string",
+              "default": host
+            },
+            {
+              "name": "port",
+              "type": "uint",
+              "default": port
+            }
+          ],
+          r"$columns": [
+            {
+              "name": "success",
+              "type": "bool"
+            },
+            {
+              "name": "message",
+              "type": "string"
+            }
+          ]
+        },
+        "Delete_Connection": {
+          r"$name": "Delete Connection",
+          r"$is": "deleteConnection",
+          r"$invokable": "write",
+          r"$result": "values",
+          r"$params": [],
+          r"$columns": []
+        }
+      };
+
+      List<String> dbs = await r.dbList().run(conn);
+      for (var db in dbs) {
+        var dbn = new DatabaseNode("${path}/${db}");
+        await dbn.setup();
+        x[db] = dbn.children;
       }
-    };
 
-    List<String> dbs = await r.dbList().run(conn);
-    for (var db in dbs) {
-      var dbn = new DatabaseNode("${path}/" + db);
-      await dbn.setup();
-      x[db] = dbn.children;
-    }
-
-    for (var a in x.keys) {
-      link.removeNode("${path}/${a}");
-      link.addNode("${path}/${a}", x[a]);
-    }
+      for (var a in x.keys) {
+        link.removeNode("${path}/${a}");
+        link.addNode("${path}/${a}", x[a]);
+      }
+    });
   }
 }
 
@@ -263,45 +279,43 @@ class DatabaseNode extends SimpleNode {
     var p = new Path(path);
     var connName = new Path(p.parentPath).name;
     var dbName = p.name;
+    await new Future.delayed(new Duration(seconds: 1));
     var conn = conns[connName];
-    try {
-      await r.dbCreate(dbName).run(conn);
-    } catch (e) {
-      // TODO
-      print("DB: $e");
-    }
+    await r.dbCreate(dbName).run(conn).catchError((e) {
+      print("DB: ${e.message}");
+    }).then((_) async {
+      var x = {
+        "Delete_Database": {
+          r"$name": "Delete Database",
+          r"$is": "deleteDatabase",
+          r"$invokable": "write",
+          r"$params": []
+        },
+        "Create_Table": {
+          r"$name": "Create Table",
+          r"$is": "createTable",
+          r"$invokable": "write",
+          r"$params": [
+            {
+              "name": "name",
+              "type": "string"
+            }
+          ]
+        }
+      };
 
-    var x = {
-      "Delete_Database": {
-        r"$name": "Delete Database",
-        r"$is": "deleteDatabase",
-        r"$invokable": "write",
-        r"$params": []
-      },
-      "Create_Table": {
-        r"$name": "Create Table",
-        r"$is": "createTable",
-        r"$invokable": "write",
-        r"$params": [
-          {
-            "name": "name",
-            "type": "string"
-          }
-        ]
+      var tables = await r.db(dbName).tableList().run(conn);
+      for (var table in tables) {
+        var tableNode = new TableNode("${path}/${table}");
+        await tableNode.setup();
+        x[table] = tableNode.children;
       }
-    };
 
-    var tables = await r.db(dbName).tableList().run(conn);
-    for (var table in tables) {
-      var tableNode = new TableNode("${path}/${table}");
-      await tableNode.setup();
-      x[table] = tableNode.children;
-    }
-
-    for (var a in x.keys) {
-      link.removeNode("${path}/${a}");
-      link.addNode("${path}/${a}", x[a]);
-    }
+      for (var a in x.keys) {
+        link.removeNode("${path}/${a}");
+        link.addNode("${path}/${a}", x[a]);
+      }
+    });
   }
 }
 
@@ -361,8 +375,7 @@ class TableNode extends SimpleNode {
     try {
       await r.db(dbName).tableCreate(tableName).run(conn);
     } catch (e) {
-      // TODO
-      print("Table: $e");
+      print("Table: ${e.message}");
     }
 
     var x = {
@@ -371,6 +384,17 @@ class TableNode extends SimpleNode {
         r"$is": "deleteTable",
         r"$invokable": "write",
         r"$params": []
+      },
+      "Insert": {
+        r"$name": "Insert",
+        r"$is": "insert",
+        r"$invokable": "write",
+        r"$params": [
+          {
+            "name": "object",
+            "type": "string"
+          }
+        ]
       }
     };
 
