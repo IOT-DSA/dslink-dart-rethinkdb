@@ -90,17 +90,31 @@ main(List<String> args) async {
       "createTable": (String path) => new CreateTableNode(path),
       "deleteTable": (String path) => new DeleteTableNode(path),
       "table": (String path) => new TableNode(path),
-      "insert": (String path) => new SimpleActionNode(path, (Map<String, dynamic> params) async {
+      "insert": (String path) => new SimpleActionNode(path, (Map<String, dynamic> params) {
         var p = new Path(path);
         var tableNode = new Path(p.parentPath);
         var dbNode = new Path(tableNode.parentPath);
         var tableName = tableNode.name;
         var dbName = dbNode.name;
         var conn = new Path(dbNode.parentPath).name;
-        var obj = JSON.decode(params["object"]);
-
-        print("bro, I'm here for ya");
-        await r.db(dbName).table(tableName).insert(obj).run(conn);
+        var objParam = params["object"];
+        var obj;
+        if (objParam is String) {
+          try {
+            obj = JSON.decode(obj);
+          } catch (e) {
+            return {
+              "message": e
+            };
+          }
+        } else if (objParam is Map) {
+          obj = objParam;
+        } else {
+          return {
+            "message": "Unknown type"
+          };
+        }
+        r.db(dbName).table(tableName).insert(obj).run(conns[conn]);
       })
     },
     autoInitialize: false,
@@ -208,7 +222,8 @@ class ConnectionNode extends SimpleNode {
 
       List<String> dbs = await r.dbList().run(conn);
       for (var db in dbs) {
-        var dbn = new DatabaseNode("${path}/${db}");
+        var dbPath = "${path}/${db}";
+        var dbn = new DatabaseNode(dbPath);
         await dbn.setup();
         x[db] = dbn.children;
       }
@@ -306,7 +321,8 @@ class DatabaseNode extends SimpleNode {
 
       var tables = await r.db(dbName).tableList().run(conn);
       for (var table in tables) {
-        var tableNode = new TableNode("${path}/${table}");
+        var tablePath = "${path}/${table}";
+        var tableNode = new TableNode(tablePath);
         await tableNode.setup();
         x[table] = tableNode.children;
       }
@@ -389,10 +405,11 @@ class TableNode extends SimpleNode {
         r"$name": "Insert",
         r"$is": "insert",
         r"$invokable": "write",
+        r"$results": "values",
         r"$params": [
           {
             "name": "object",
-            "type": "string"
+            "type": "dynamic"
           }
         ]
       }
