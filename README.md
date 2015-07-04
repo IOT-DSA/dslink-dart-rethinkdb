@@ -1,6 +1,6 @@
-# MongoDB DSLink
+# RethinkDB DSLink
 
-A DSLink for MongoDB.
+A DSLink for RethinkDB.
 
 ## Usage
 

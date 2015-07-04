@@ -163,7 +163,6 @@ main(List<String> args) async {
         var dbName = params["db"];
         var tableName = params["table"];
         var conn = conns[new Path(new Path(path).parentPath).name];
-        print(conn);
         var objParam = params["obj"];
         var obj;
         if (objParam is String) {

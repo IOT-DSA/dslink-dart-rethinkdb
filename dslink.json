@@ -1,7 +1,7 @@
 {
-  "name": "dslink-dart-mongodb",
+  "name": "dslink-dart-rethinkdb",
   "version": "1.0.0",
-  "description": "MongoDB DSLink",
+  "description": "RethinkDB DSLink",
   "main": "bin/run.dart",
   "engines": {
     "dart": ">=1.9.0"
