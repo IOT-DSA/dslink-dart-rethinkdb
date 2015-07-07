@@ -1,3 +1,4 @@
+import "dart:async";
 import "dart:convert";
 
 import "package:rethinkdb_driver/rethinkdb_driver.dart" as Rethink;
@@ -194,7 +195,8 @@ main(List<String> args) async {
             "message": e
           };
         }
-      })
+      }),
+      "queryData": (String path) => new QueryDataNode(path, link.provider)
     },
     autoInitialize: false,
     encodePrettyJson: true
@@ -373,6 +375,22 @@ class ConnectionNode extends SimpleNode {
             }
           ]
         },
+        "Query_Data": {
+          r"$name": "Query Data",
+          r"$is": "queryData",
+          r"$invokable": "read",
+          r"$params": [
+            {
+              "name": "db",
+              "type": "string"
+            },
+            {
+              "name": "table",
+              "type": "string"
+            }
+          ],
+          r"$result": "table"
+        },
         "Insert_Document": {
           r"$name": "Insert Document",
           r"$is": "insertDocument",
@@ -460,5 +478,37 @@ class DeleteConnectionNode extends SimpleNode {
     link.removeNode(new Path(path).parentPath);
     link.save();
     return {};
+  }
+}
+
+class QueryDataNode extends SimpleNode {
+  QueryDataNode(String path, NodeProvider provider) : super(path, provider);
+
+  @override
+  onInvoke(Map<String, dynamic> params) {
+    var tr = new AsyncTableResult();
+
+    new Future(() async {
+      var dbName = params["db"];
+      var tableName = params["table"];
+      var conn = conns[new Path(new Path(path).parentPath).name];
+      Rethink.Cursor cursor = await r.db(dbName).table(tableName).run(conn);
+      var data = [];
+      var keys = new Set<String>();
+      await cursor.listen((x) {
+        if (x is Map) {
+          data.add(x);
+          keys.addAll(x.keys);
+        }
+      }).asFuture();
+      var col = keys.map((x) =>  {
+        "name": x,
+        "type": "dynamic"
+      }).toList();
+      tr.columns = col;
+      tr.update(data, StreamStatus.closed);
+    });
+
+    return tr;
   }
 }
